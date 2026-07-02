@@ -1,5 +1,5 @@
-from datetime import datetime
 import re
+from datetime import datetime
 
 from city_scrapers_core.constants import BOARD, COMMITTEE
 from city_scrapers_core.items import Meeting
@@ -73,8 +73,7 @@ class DaltxBotSpider(CityScrapersSpider):
 
         time_str = " ".join(
             (
-                self._first_li(item, "fa-clock").xpath(".//strong/text()").get()
-                or ""
+                self._first_li(item, "fa-clock").xpath(".//strong/text()").get() or ""
             ).split()
         )
 
@@ -89,11 +88,11 @@ class DaltxBotSpider(CityScrapersSpider):
         return start_dt, end_dt, False
 
     def _parse_location(self, response):
-        location_str = self._first_li(
-            response, "fa-map-marker-alt")
+        location_str = self._first_li(response, "fa-map-marker-alt")
 
-        parts = [t.strip() for t in location_str.xpath(
-            ".//text()").getall() if t.strip()]
+        parts = [
+            t.strip() for t in location_str.xpath(".//text()").getall() if t.strip()
+        ]
 
         return {
             "name": parts[0] if parts else "",
@@ -121,7 +120,6 @@ class DaltxBotSpider(CityScrapersSpider):
             elif self.video_param in href:
                 seen.add(href)
                 links.append(
-                    {"href": response.urljoin(
-                        href), "title": title.title() or "Video"}
+                    {"href": response.urljoin(href), "title": title.title() or "Video"}
                 )
         return links
