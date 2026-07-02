@@ -1,6 +1,7 @@
 from datetime import datetime
+import re
 
-from city_scrapers_core.constants import BOARD
+from city_scrapers_core.constants import BOARD, COMMITTEE
 from city_scrapers_core.items import Meeting
 from city_scrapers_core.spiders import CityScrapersSpider
 from dateutil.parser import parse as date_parser
@@ -10,38 +11,40 @@ class DaltxBotSpider(CityScrapersSpider):
     name = "daltx_bot"
     agency = "Dallas College Board of Trustees"
     timezone = "America/Chicago"
-    start_urls = [
-        "https://www.dallascollege.edu/events/?categories%5B%5D=Category%3EBoard%20of%20Trustees&search=all"  # noqa
-    ]
+
+    start_urls = ["https://www.dallascollege.edu/sitemap.xml"]
+
+    video_param = "mediaportal.dallascollege.edu/media/"
+
+    detail_re = re.compile(r"/events/trustees/\d{4}/[^/]+/?$")
 
     def parse(self, response):
-        records = response.css(".row.calendar-search-results")
+        response.selector.remove_namespaces()
 
-        for item in records:
-            detail_url = item.css("h4.cal-header a::attr(href)").get()
-            if not detail_url:
-                continue
+        detail_urls = response.xpath("//loc/text()").getall()
+        for url in detail_urls:
+            if self.detail_re.search(url):
+                yield response.follow(
+                    url=response.urljoin(url),
+                    callback=self._parse_detail,
+                )
 
-            yield response.follow(
-                url=response.urljoin(detail_url),
-                callback=self._construct_meeting,
-                meta={"item": item},
-            )
+    def _parse_detail(self, response):
+        start, end, all_day = self._parse_datetime(response)
+        if start is None:
+            self.logger.warning(f"Missing date, skipping: {response.url}")
+            return
 
-    def _construct_meeting(self, response):
-        item = response.meta["item"]
-
-        start, end, all_day = self._parse_datetime(item)
-        location, time_notes = self._parse_location(response, all_day)
+        title = self._parse_title(response)
         meeting = Meeting(
-            title=self._parse_title(item),
-            description=self._parse_description(item),
-            classification=BOARD,
+            title=title,
+            description="",
+            classification=COMMITTEE if "committee" in title.lower() else BOARD,
             start=start,
             end=end,
             all_day=all_day,
-            time_notes=time_notes,
-            location=location,
+            time_notes="",
+            location=self._parse_location(response),
             links=self._parse_links(response),
             source=response.url,
         )
@@ -52,71 +55,73 @@ class DaltxBotSpider(CityScrapersSpider):
         yield meeting
 
     def _parse_title(self, item):
-        item_str = item.css("h4.cal-header a::text").get()
-        return item_str.strip() if item_str else ""
+        item_str = item.css("h1.page-header--xl::text").get()
+        return " ".join(item_str.split()) if item_str else "Regular Meeting"
 
-    def _parse_description(self, item):
-        item_str = item.css(".cal-summary p::text").get()
-        return item_str.strip() if item_str else ""
+    def _first_li(self, response, icon):
+        """First event-card <li> flagged by a Font Awesome icon class."""
+        return response.xpath(f'(//li[.//span[contains(@class, "{icon}")]])[1]')
 
     def _parse_datetime(self, item) -> tuple[datetime, datetime, bool]:
-        date_list = item.css(".month::text, .day::text, .year::text").getall()
-        date_str = " ".join(date_list).strip()
+        date_str = self._first_li(item, "fa-calendar").xpath(".//strong/text()").get()
+
         if not date_str:
             self.logger.warning(f"Missing date for item: {item.get()}")
             return None, None, False
 
-        start_time = item.css(".mb-2 span:nth-child(2)::text").get()
-        end_time = item.css(".mb-2 span:nth-child(3)::text").get()
+        base = date_parser(date_str)
 
-        if start_time == "All day":
-            dt = date_parser(date_str)
-            return dt, dt, True
+        time_str = " ".join(
+            (
+                self._first_li(item, "fa-clock").xpath(".//strong/text()").get()
+                or ""
+            ).split()
+        )
 
-        if not start_time or not end_time:
-            dt = date_parser(date_str)
-            return dt, dt, False
+        if not time_str or time_str.lower() == "all day":
+            return base, None, True
 
-        start_dt = date_parser(f"{date_str} {start_time.strip()}")
-        end_dt = date_parser(f"{date_str} {end_time.strip()}")
+        start_time_str, _, end_time_str = time_str.partition(" to ")
+
+        start_dt = date_parser(f"{date_str} {start_time_str.strip()}")
+        end_dt = date_parser(f"{date_str} {end_time_str.strip()}")
 
         return start_dt, end_dt, False
 
-    def _parse_location(self, response, all_day):
-        item = response.css(".accordion-body ul li::text").getall()
+    def _parse_location(self, response):
+        location_str = self._first_li(
+            response, "fa-map-marker-alt")
 
-        location = {
-            "name": "",
-            "address": "",
+        parts = [t.strip() for t in location_str.xpath(
+            ".//text()").getall() if t.strip()]
+
+        return {
+            "name": parts[0] if parts else "",
+            "address": " ".join(parts[1:]) if len(parts) > 1 else "",
         }
-        time_notes = ""
-
-        if all_day:
-            time_notes = item[2].strip() if len(item) > 2 else ""
-            return location, time_notes
-
-        if len(item) > 2:
-            location["name"] = item[1].strip()
-            location["address"] = item[2].strip()
-        return location, time_notes
 
     def _parse_links(self, response):
-        pdf_links = response.css("a[href*='.pdf']")
         links = [
             {
                 "href": response.url,
                 "title": "Meeting Details",
             }
         ]
-        if pdf_links:
-            links.extend(
-                [
-                    {
-                        "href": response.urljoin(link.attrib["href"]),
-                        "title": (link.css("::text").get() or "").strip()
-                        or "Attachment",
-                    }
-                    for link in pdf_links
-                ]
-            )
+        seen = set()
+        for a in response.css("div.col-md-7 a"):
+            href = a.attrib.get("href", "")
+            if not href or href in seen:
+                continue
+            title = " ".join(a.css("::text").getall()).strip()
+            if href.lower().endswith(".pdf"):
+                seen.add(href)
+                links.append(
+                    {"href": response.urljoin(href), "title": title or "Agenda"}
+                )
+            elif self.video_param in href:
+                seen.add(href)
+                links.append(
+                    {"href": response.urljoin(
+                        href), "title": title.title() or "Video"}
+                )
         return links
