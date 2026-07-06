@@ -64,7 +64,10 @@ def test_title(parsed_item):
 
 
 def test_description(parsed_item):
-    assert parsed_item["description"] == ""
+    assert (
+        parsed_item["description"]
+        == "The Board of Trustees will hold a regular meeting on June 2, 2026."
+    )
 
 
 def test_start(parsed_item):

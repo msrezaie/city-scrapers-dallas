@@ -38,7 +38,7 @@ class DaltxBotSpider(CityScrapersSpider):
         title = self._parse_title(response)
         meeting = Meeting(
             title=title,
-            description="",
+            description=self._parse_description(response),
             classification=COMMITTEE if "committee" in title.lower() else BOARD,
             start=start,
             end=end,
@@ -57,6 +57,11 @@ class DaltxBotSpider(CityScrapersSpider):
     def _parse_title(self, item):
         item_str = item.css("h1.page-header--xl::text").get()
         return " ".join(item_str.split()) if item_str else "Regular Meeting"
+
+    def _parse_description(self, response):
+        return (
+            response.css('meta[name="description"]::attr(content)').get() or ""
+        ).strip()
 
     def _first_li(self, response, icon):
         """First event-card <li> flagged by a Font Awesome icon class."""
